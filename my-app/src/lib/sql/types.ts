@@ -3,6 +3,7 @@
 export type FlowNodeKind =
   | "table-source"
   | "cte"
+  | "cte-group"
   | "join"
   | "filter"
   | "aggregation"
@@ -51,6 +52,12 @@ export type AggregationData = {
   aggregates: string[];
 };
 
+export type CTEGroupData = {
+  kind: "cte-group";
+  cteName: string;
+  colorIndex: number;
+};
+
 export type OutputData = {
   kind: "output";
   columns: ColumnRef[];
@@ -63,6 +70,7 @@ export type OutputData = {
 export type FlowNodeData =
   | TableSourceData
   | CTEData
+  | CTEGroupData
   | JoinData
   | FilterData
   | AggregationData
@@ -71,6 +79,8 @@ export type FlowNodeData =
 export type FlowNode = {
   id: string;
   data: FlowNodeData;
+  /** If set, this node belongs to the CTE group with this ID */
+  parentCteId?: string;
 };
 
 export type FlowEdge = {

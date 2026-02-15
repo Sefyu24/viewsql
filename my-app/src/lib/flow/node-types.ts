@@ -4,6 +4,7 @@ import { JoinNode } from "@/components/flow/nodes/JoinNode";
 import { FilterNode } from "@/components/flow/nodes/FilterNode";
 import { AggregationNode } from "@/components/flow/nodes/AggregationNode";
 import { CTENode } from "@/components/flow/nodes/CTENode";
+import { CTEGroupNode } from "@/components/flow/nodes/CTEGroupNode";
 import { OutputNode } from "@/components/flow/nodes/OutputNode";
 
 /**
@@ -18,5 +19,6 @@ export const nodeTypes: NodeTypes = {
   filter: FilterNode,
   aggregation: AggregationNode,
   cte: CTENode,
+  "cte-group": CTEGroupNode,
   output: OutputNode,
 };

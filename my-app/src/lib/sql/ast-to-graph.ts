@@ -92,6 +92,8 @@ class FlowGraphBuilder {
   private currentRefs = new Map<string, Set<string>>();
   /** Whether the current SELECT uses an unqualified SELECT * */
   private currentShowAll = false;
+  /** When processing a CTE, the ID of its group node (null otherwise) */
+  private currentCteGroupId: string | null = null;
 
   constructor(schema?: SchemaTable[]) {
     this.schemaMap = new Map(
@@ -104,6 +106,9 @@ class FlowGraphBuilder {
   }
 
   private addNode(node: FlowNode): string {
+    if (this.currentCteGroupId && node.data.kind !== "cte-group") {
+      node.parentCteId = this.currentCteGroupId;
+    }
     this.nodes.push(node);
     return node.id;
   }
@@ -241,14 +246,33 @@ class FlowGraphBuilder {
 
   /**
    * Process a CTE definition and register it for later reference.
+   *
+   * Creates a group container node, then processes the CTE's inner SELECT
+   * so all inner nodes are tagged with `parentCteId`. Finally creates the
+   * CTE result node inside the group.
    */
   processCTE(name: string, select: SelectFromStatement): void {
-    const innerLastNodeId = this.processSelectInner(select);
-
-    const cteId = this.nextId("cte");
-    const outputCols = this.resolveSelectColumns(select);
     const colorIndex = this.tableColorCounter++;
     this.tableColorMap.set(name, colorIndex);
+
+    // 1. Create the group container node
+    const groupId = this.nextId("cte_group");
+    this.addNode({
+      id: groupId,
+      data: {
+        kind: "cte-group",
+        cteName: name,
+        colorIndex,
+      },
+    });
+
+    // 2. Process inner SELECT with group tagging active
+    this.currentCteGroupId = groupId;
+    const innerLastNodeId = this.processSelectInner(select);
+
+    // 3. Create the CTE result node (also inside the group)
+    const cteId = this.nextId("cte");
+    const outputCols = this.resolveSelectColumns(select);
 
     this.addNode({
       id: cteId,
@@ -265,6 +289,9 @@ class FlowGraphBuilder {
     if (innerLastNodeId) {
       this.addEdge(innerLastNodeId, cteId, { animated: true });
     }
+
+    // 4. Reset group tagging
+    this.currentCteGroupId = null;
 
     this.cteRegistry.set(name, cteId);
   }

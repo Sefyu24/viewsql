@@ -15,12 +15,27 @@ const MIN_HEIGHT = 60;
 const NODE_SPACING = 50;
 /** Horizontal spacing between layers (left-to-right distance) */
 const LAYER_SPACING = 100;
+/** Padding inside CTE group container nodes */
+const GROUP_PADDING = 20;
+
+/** Shared layout options for both root and compound nodes */
+const SHARED_LAYOUT_OPTIONS = {
+  "elk.algorithm": "layered",
+  "elk.direction": "RIGHT",
+  "elk.spacing.nodeNode": String(NODE_SPACING),
+  "elk.layered.spacing.nodeNodeBetweenLayers": String(LAYER_SPACING),
+  "elk.edgeRouting": "ORTHOGONAL",
+  "elk.layered.considerModelOrder.strategy": "NODES_AND_EDGES",
+  "elk.layered.nodePlacement.strategy": "BRANDES_KOEPF",
+  "elk.layered.crossingMinimization.strategy": "LAYER_SWEEP",
+};
 
 /**
  * Estimate the pixel dimensions of a flow node based on its data.
  *
  * Table-source, CTE, and output nodes use a wider width since they
  * display column lists. Join/filter/aggregation nodes are compact.
+ * CTE group nodes return 0×0 since ELK computes their size from children.
  *
  * @param node - A FlowNode from the flow graph.
  * @returns Object with `width` and `height` in pixels.
@@ -30,6 +45,9 @@ function estimateNodeSize(node: FlowNode): { width: number; height: number } {
   let width = COMPACT_WIDTH;
 
   switch (node.data.kind) {
+    case "cte-group":
+      // ELK computes compound node size from its children
+      return { width: 0, height: 0 };
     case "table-source":
       rows = Math.max(node.data.columns.length, 1) + 1;
       width = WIDE_WIDTH;
@@ -63,9 +81,10 @@ function estimateNodeSize(node: FlowNode): { width: number; height: number } {
 /**
  * Compute automatic layout positions for a FlowGraph using ELK.js.
  *
- * Uses a layered (Sugiyama) algorithm with left-to-right direction.
- * Nodes are arranged in layers based on their dependencies, with
- * parallel pipelines (e.g. CTE branches) placed in separate rows.
+ * Builds a hierarchical ELK graph: CTE group nodes become compound ElkNodes
+ * with their tagged children nested inside. Edges where both endpoints are
+ * inside the same group are placed on that group's edges array; cross-group
+ * edges go on the root.
  *
  * @param graph - A FlowGraph with nodes and edges.
  * @returns Map of node ID → `{ x, y, width, height }`.
@@ -73,38 +92,97 @@ function estimateNodeSize(node: FlowNode): { width: number; height: number } {
 export async function computeLayout(
   graph: FlowGraph
 ): Promise<Map<string, { x: number; y: number; width: number; height: number }>> {
-  const elkNodes: ElkNode[] = graph.nodes.map((node) => {
-    const size = estimateNodeSize(node);
-    return {
-      id: node.id,
-      width: size.width,
-      height: size.height,
-    };
-  });
+  // Build lookup: nodeId → parentCteId
+  const parentMap = new Map<string, string>();
+  for (const node of graph.nodes) {
+    if (node.parentCteId) {
+      parentMap.set(node.id, node.parentCteId);
+    }
+  }
 
-  const elkEdges: ElkExtendedEdge[] = graph.edges.map((edge) => ({
-    id: edge.id,
-    sources: [edge.source],
-    targets: [edge.target],
-  }));
+  // Collect group IDs
+  const groupIds = new Set(
+    graph.nodes
+      .filter((n) => n.data.kind === "cte-group")
+      .map((n) => n.id)
+  );
+
+  // Build ELK child nodes grouped by parent
+  const groupChildren = new Map<string, ElkNode[]>();
+  const rootChildren: ElkNode[] = [];
+
+  for (const node of graph.nodes) {
+    if (node.data.kind === "cte-group") {
+      // Will be added as a compound node below
+      groupChildren.set(node.id, []);
+      continue;
+    }
+
+    const elkNode: ElkNode = {
+      id: node.id,
+      ...estimateNodeSize(node),
+    };
+
+    const parent = parentMap.get(node.id);
+    if (parent && groupChildren.has(parent)) {
+      groupChildren.get(parent)!.push(elkNode);
+    } else {
+      rootChildren.push(elkNode);
+    }
+  }
+
+  // Build compound group nodes and add to root children
+  for (const node of graph.nodes) {
+    if (node.data.kind !== "cte-group") continue;
+
+    const compoundNode: ElkNode = {
+      id: node.id,
+      layoutOptions: {
+        ...SHARED_LAYOUT_OPTIONS,
+        "elk.padding": `[top=${GROUP_PADDING + 24},left=${GROUP_PADDING},bottom=${GROUP_PADDING},right=${GROUP_PADDING}]`,
+      },
+      children: groupChildren.get(node.id) ?? [],
+      edges: [],
+    };
+    rootChildren.push(compoundNode);
+  }
+
+  // Partition edges: internal to a group vs cross-group (root)
+  const groupEdges = new Map<string, ElkExtendedEdge[]>();
+  for (const gid of groupIds) {
+    groupEdges.set(gid, []);
+  }
+  const rootEdges: ElkExtendedEdge[] = [];
+
+  for (const edge of graph.edges) {
+    const sourceParent = parentMap.get(edge.source);
+    const targetParent = parentMap.get(edge.target);
+
+    const elkEdge: ElkExtendedEdge = {
+      id: edge.id,
+      sources: [edge.source],
+      targets: [edge.target],
+    };
+
+    if (sourceParent && sourceParent === targetParent && groupIds.has(sourceParent)) {
+      groupEdges.get(sourceParent)!.push(elkEdge);
+    } else {
+      rootEdges.push(elkEdge);
+    }
+  }
+
+  // Attach internal edges to their compound nodes
+  for (const child of rootChildren) {
+    if (groupIds.has(child.id)) {
+      child.edges = groupEdges.get(child.id) ?? [];
+    }
+  }
 
   const elkGraph: ElkNode = {
     id: "root",
-    layoutOptions: {
-      "elk.algorithm": "layered",
-      "elk.direction": "RIGHT",
-      "elk.spacing.nodeNode": String(NODE_SPACING),
-      "elk.layered.spacing.nodeNodeBetweenLayers": String(LAYER_SPACING),
-      "elk.edgeRouting": "ORTHOGONAL",
-      // Place nodes with no shared edges into separate parallel lanes
-      "elk.layered.considerModelOrder.strategy": "NODES_AND_EDGES",
-      // Improve vertical alignment within each layer
-      "elk.layered.nodePlacement.strategy": "BRANDES_KOEPF",
-      // Reduce unnecessary edge crossings
-      "elk.layered.crossingMinimization.strategy": "LAYER_SWEEP",
-    },
-    children: elkNodes,
-    edges: elkEdges,
+    layoutOptions: SHARED_LAYOUT_OPTIONS,
+    children: rootChildren,
+    edges: rootEdges,
   };
 
   const layoutResult = await elk.layout(elkGraph);
@@ -114,14 +192,23 @@ export async function computeLayout(
     { x: number; y: number; width: number; height: number }
   >();
 
-  for (const child of layoutResult.children ?? []) {
-    positions.set(child.id, {
-      x: child.x ?? 0,
-      y: child.y ?? 0,
-      width: child.width ?? COMPACT_WIDTH,
-      height: child.height ?? MIN_HEIGHT,
-    });
+  // Extract positions from the layout result (handles nested compound nodes)
+  function extractPositions(children: ElkNode[] | undefined) {
+    for (const child of children ?? []) {
+      positions.set(child.id, {
+        x: child.x ?? 0,
+        y: child.y ?? 0,
+        width: child.width ?? COMPACT_WIDTH,
+        height: child.height ?? MIN_HEIGHT,
+      });
+      // Recurse into compound node children (positions are relative to parent)
+      if (child.children && child.children.length > 0) {
+        extractPositions(child.children);
+      }
+    }
   }
+
+  extractPositions(layoutResult.children);
 
   return positions;
 }
