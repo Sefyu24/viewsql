@@ -29,6 +29,9 @@ export async function flowGraphToReactFlow(
   for (const node of graph.nodes) {
     const pos = positions.get(node.id) ?? { x: 0, y: 0, width: 220, height: 60 };
 
+    // Group nodes need explicit width/height so the container renders at the
+    // ELK-computed size. All other nodes use auto height so content never clips.
+    const isGroup = node.data.kind === "cte-group";
     const rfNode: Node<FlowNodeData> = {
       id: node.id,
       type: node.data.kind,
@@ -36,14 +39,14 @@ export async function flowGraphToReactFlow(
       data: node.data,
       style: {
         width: pos.width,
-        height: pos.height,
+        ...(isGroup ? { height: pos.height } : {}),
         background: "transparent",
         border: "none",
         padding: 0,
       },
     };
 
-    if (node.data.kind === "cte-group") {
+    if (isGroup) {
       parentNodes.push(rfNode);
     } else if (node.parentCteId) {
       rfNode.parentId = node.parentCteId;

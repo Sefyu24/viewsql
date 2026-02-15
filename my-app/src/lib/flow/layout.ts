@@ -1,22 +1,29 @@
 import ELK, { type ElkNode, type ElkExtendedEdge } from "elkjs/lib/elk.bundled.js";
 import type { FlowGraph, FlowNode } from "@/lib/sql/types";
 
-const elk = new ELK();
+/** Lazy-initialized ELK instance to avoid WASM compile-from-read-Response errors in Turbopack */
+let elk: InstanceType<typeof ELK> | null = null;
+function getElk(): InstanceType<typeof ELK> {
+  if (!elk) elk = new ELK();
+  return elk;
+}
 
 /** Estimated node width for compact nodes (join, filter, aggregation) */
 const COMPACT_WIDTH = 200;
 /** Estimated node width for nodes with columns (table-source, cte, output) */
 const WIDE_WIDTH = 260;
 /** Estimated height per column row inside a node */
-const ROW_HEIGHT = 24;
+const ROW_HEIGHT = 28;
 /** Minimum node height */
-const MIN_HEIGHT = 60;
+const MIN_HEIGHT = 70;
+/** Extra vertical buffer added to every node height for borders, padding, badges */
+const HEIGHT_BUFFER = 16;
 /** Vertical spacing between nodes in the same layer */
-const NODE_SPACING = 50;
+const NODE_SPACING = 60;
 /** Horizontal spacing between layers (left-to-right distance) */
-const LAYER_SPACING = 100;
+const LAYER_SPACING = 120;
 /** Padding inside CTE group container nodes */
-const GROUP_PADDING = 20;
+const GROUP_PADDING = 28;
 
 /** Shared layout options for both root and compound nodes */
 const SHARED_LAYOUT_OPTIONS = {
@@ -65,8 +72,8 @@ function estimateNodeSize(node: FlowNode): { width: number; height: number } {
       rows = node.data.groupByColumns.length + node.data.aggregates.length + 1;
       break;
     case "join":
-      // Venn diagram node is more compact and square-ish
-      return { width: 150, height: 100 };
+      // Venn diagram node — compact and square-ish
+      return { width: 160, height: 120 };
     case "filter":
       rows = 2;
       break;
@@ -74,7 +81,7 @@ function estimateNodeSize(node: FlowNode): { width: number; height: number } {
 
   return {
     width,
-    height: Math.max(MIN_HEIGHT, rows * ROW_HEIGHT + 20),
+    height: Math.max(MIN_HEIGHT, rows * ROW_HEIGHT + HEIGHT_BUFFER),
   };
 }
 
@@ -185,7 +192,7 @@ export async function computeLayout(
     edges: rootEdges,
   };
 
-  const layoutResult = await elk.layout(elkGraph);
+  const layoutResult = await getElk().layout(elkGraph);
 
   const positions = new Map<
     string,
