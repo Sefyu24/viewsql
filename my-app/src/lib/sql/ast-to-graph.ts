@@ -85,6 +85,9 @@ class FlowGraphBuilder {
   private cteRegistry = new Map<string, string>();
   /** Maps table aliases to their node IDs */
   private aliasRegistry = new Map<string, string>();
+  /** Maps table name → color palette index */
+  private tableColorMap = new Map<string, number>();
+  private tableColorCounter = 0;
 
   constructor(schema?: SchemaTable[]) {
     this.schemaMap = new Map(
@@ -173,6 +176,12 @@ class FlowGraphBuilder {
         ? (select.limit.limit as { value: number }).value
         : undefined;
 
+    // Build color map for the output node: table name → color index
+    const tableColorMap: Record<string, number> = {};
+    for (const [name, index] of this.tableColorMap) {
+      tableColorMap[name] = index;
+    }
+
     this.addNode({
       id: outputId,
       data: {
@@ -180,6 +189,7 @@ class FlowGraphBuilder {
         columns: outputCols,
         orderBy,
         limit,
+        tableColorMap,
       },
     });
 
@@ -274,9 +284,12 @@ class FlowGraphBuilder {
         currentNodeId = this.cteRegistry.get(tableName)!;
         if (alias) this.aliasRegistry.set(alias, currentNodeId);
       } else {
-        // Regular table source
+        // Regular table source — assign a unique color
         const tableId = this.nextId("table");
         const columns = this.getSchemaColumns(tableName);
+        const colorIndex = this.tableColorCounter++;
+        this.tableColorMap.set(tableName, colorIndex);
+        if (alias) this.tableColorMap.set(alias, colorIndex);
 
         this.addNode({
           id: tableId,
@@ -285,6 +298,7 @@ class FlowGraphBuilder {
             tableName,
             alias,
             columns,
+            colorIndex,
           },
         });
 

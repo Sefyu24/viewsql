@@ -22,7 +22,9 @@ export function OutputNode({ data }: NodeProps) {
       showOutput={false}
     >
       <div className="space-y-1.5">
-        {d.columns.length > 0 && <ColumnList columns={d.columns} />}
+        {d.columns.length > 0 && (
+          <ColumnList columns={d.columns} tableColorMap={d.tableColorMap} />
+        )}
         {(d.orderBy || d.limit !== undefined) && (
           <div className="flex gap-1 pt-1 border-t">
             {d.orderBy && (

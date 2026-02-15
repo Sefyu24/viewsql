@@ -20,6 +20,8 @@ export type TableSourceData = {
   tableName: string;
   alias?: string;
   columns: ColumnRef[];
+  /** Index into the color palette — assigned during graph building */
+  colorIndex?: number;
 };
 
 export type CTEData = {
@@ -52,6 +54,8 @@ export type OutputData = {
   columns: ColumnRef[];
   orderBy?: string;
   limit?: number;
+  /** Maps table name (or alias) → color palette index for column highlighting */
+  tableColorMap?: Record<string, number>;
 };
 
 export type FlowNodeData =
