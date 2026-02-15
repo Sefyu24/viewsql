@@ -247,6 +247,8 @@ class FlowGraphBuilder {
 
     const cteId = this.nextId("cte");
     const outputCols = this.resolveSelectColumns(select);
+    const colorIndex = this.tableColorCounter++;
+    this.tableColorMap.set(name, colorIndex);
 
     this.addNode({
       id: cteId,
@@ -256,6 +258,7 @@ class FlowGraphBuilder {
         outputColumns: outputCols,
         hasWhere: !!select.where,
         hasGroupBy: !!(select.groupBy && select.groupBy.length > 0),
+        colorIndex,
       },
     });
 
@@ -393,7 +396,12 @@ class FlowGraphBuilder {
       // Check if this is a CTE reference
       if (this.cteRegistry.has(tableName)) {
         currentNodeId = this.cteRegistry.get(tableName)!;
-        if (alias) this.aliasRegistry.set(alias, currentNodeId);
+        if (alias) {
+          this.aliasRegistry.set(alias, currentNodeId);
+          // Register alias in color map so Result columns using the alias get colored
+          const cteColor = this.tableColorMap.get(tableName);
+          if (cteColor !== undefined) this.tableColorMap.set(alias, cteColor);
+        }
       } else {
         // Regular table source — assign a unique color
         const tableId = this.nextId("table");

@@ -2,6 +2,7 @@
 
 import type { NodeProps } from "@xyflow/react";
 import type { CTEData } from "@/lib/sql/types";
+import { getTableColor } from "@/lib/flow/colors";
 import { FlowNodeShell } from "../shared/flow-node-shell";
 import { ColumnList } from "../shared/column-list";
 import { Badge } from "@/components/ui/badge";
@@ -9,17 +10,18 @@ import { Badge } from "@/components/ui/badge";
 /**
  * Flow node representing a Common Table Expression (CTE / WITH clause).
  *
- * Cyan header. Shows CTE name, output columns, and inline badges
- * indicating if it contains WHERE or GROUP BY clauses.
+ * Header color is unique per CTE (assigned from the palette)
+ * so the same color appears on matching output columns in the Result node.
  */
 export function CTENode({ data }: NodeProps) {
   const d = data as unknown as CTEData;
+  const color = getTableColor(d.colorIndex ?? 0);
 
   return (
     <FlowNodeShell
       title={d.cteName}
       badge="CTE"
-      headerColorClass="bg-cyan-100 dark:bg-cyan-950 text-cyan-900 dark:text-cyan-100"
+      headerColorClass={color.header}
     >
       <div className="space-y-1.5">
         {(d.hasWhere || d.hasGroupBy) && (
@@ -37,7 +39,7 @@ export function CTENode({ data }: NodeProps) {
           </div>
         )}
         {d.outputColumns.length > 0 && (
-          <ColumnList columns={d.outputColumns} />
+          <ColumnList columns={d.outputColumns} showSourceLabel={false} />
         )}
       </div>
     </FlowNodeShell>

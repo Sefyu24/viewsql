@@ -30,6 +30,8 @@ export type CTEData = {
   outputColumns: ColumnRef[];
   hasWhere: boolean;
   hasGroupBy: boolean;
+  /** Index into the color palette — assigned during graph building */
+  colorIndex?: number;
 };
 
 export type JoinData = {
