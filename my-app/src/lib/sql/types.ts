@@ -39,6 +39,10 @@ export type JoinData = {
   kind: "join";
   joinType: "INNER" | "LEFT" | "RIGHT" | "FULL" | "CROSS";
   condition: string;
+  /** Combined columns available after the join (left + right inputs) */
+  outputColumns?: ColumnRef[];
+  /** Color map so output columns can be traced back to source tables */
+  tableColorMap?: Record<string, number>;
 };
 
 export type FilterData = {

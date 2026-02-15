@@ -94,6 +94,8 @@ class FlowGraphBuilder {
   private currentShowAll = false;
   /** When processing a CTE, the ID of its group node (null otherwise) */
   private currentCteGroupId: string | null = null;
+  /** Tracks the column set carried by each node ID (for computing join output columns) */
+  private nodeColumns = new Map<string, ColumnRef[]>();
 
   constructor(schema?: SchemaTable[]) {
     this.schemaMap = new Map(
@@ -290,6 +292,16 @@ class FlowGraphBuilder {
       this.addEdge(innerLastNodeId, cteId, { animated: true });
     }
 
+    // Register CTE output columns for external use — re-tag sourceTable to
+    // the CTE name so downstream joins can look up colors correctly.
+    // (resolveSelectColumns returns inner table aliases like "r" which aren't
+    // visible outside the CTE.)
+    const externalCols = outputCols.map((col) => ({
+      ...col,
+      sourceTable: name,
+    }));
+    this.nodeColumns.set(cteId, externalCols);
+
     // 4. Reset group tagging
     this.currentCteGroupId = null;
 
@@ -419,10 +431,12 @@ class FlowGraphBuilder {
       const alias = tableFrom.name?.alias;
 
       let currentNodeId: string;
+      let currentColumns: ColumnRef[];
 
       // Check if this is a CTE reference
       if (this.cteRegistry.has(tableName)) {
         currentNodeId = this.cteRegistry.get(tableName)!;
+        currentColumns = this.nodeColumns.get(currentNodeId) ?? [];
         if (alias) {
           this.aliasRegistry.set(alias, currentNodeId);
           // Register alias in color map so Result columns using the alias get colored
@@ -454,6 +468,8 @@ class FlowGraphBuilder {
 
         this.aliasRegistry.set(alias ?? tableName, tableId);
         currentNodeId = tableId;
+        currentColumns = columns;
+        this.nodeColumns.set(tableId, columns);
       }
 
       // If this FROM entry has a join, create a join node connecting
@@ -471,14 +487,28 @@ class FlowGraphBuilder {
           ? extractColumnRefs(tableFrom.join.on).map((r) => r.column)
           : [];
 
+        // Combine columns from left and right inputs
+        const leftColumns = this.nodeColumns.get(lastNodeId) ?? [];
+        const outputColumns = [...leftColumns, ...currentColumns];
+
+        // Build color map snapshot for this join's output columns
+        const tableColorMap: Record<string, number> = {};
+        for (const [name, index] of this.tableColorMap) {
+          tableColorMap[name] = index;
+        }
+
         this.addNode({
           id: joinId,
           data: {
             kind: "join",
             joinType: joinType as "INNER" | "LEFT" | "RIGHT" | "FULL" | "CROSS",
             condition,
+            outputColumns,
+            tableColorMap,
           },
         });
+
+        this.nodeColumns.set(joinId, outputColumns);
 
         this.addEdge(lastNodeId, joinId, {
           animated: true,

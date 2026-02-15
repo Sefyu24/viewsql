@@ -75,7 +75,7 @@ export function ColumnList({
                 )}
               </div>
             </TooltipTrigger>
-            <TooltipContent side="top" className="text-xs">
+            <TooltipContent side="top" className="text-[10px] px-2 py-1">
               {tooltipText}
             </TooltipContent>
           </Tooltip>

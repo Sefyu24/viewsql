@@ -2,7 +2,14 @@
 
 import { useId } from "react";
 import { Handle, Position, type NodeProps } from "@xyflow/react";
+import { ChevronRight } from "lucide-react";
 import type { JoinData } from "@/lib/sql/types";
+import { ColumnList } from "../shared/column-list";
+import {
+  Collapsible,
+  CollapsibleTrigger,
+  CollapsibleContent,
+} from "@/components/ui/collapsible";
 
 /**
  * SVG Venn diagram representing a SQL JOIN.
@@ -167,6 +174,23 @@ export function JoinNode({ data }: NodeProps) {
         <div className="text-[10px] text-muted-foreground font-mono mt-1 text-center break-all max-w-[160px] leading-tight">
           {d.condition}
         </div>
+      )}
+
+      {d.outputColumns && d.outputColumns.length > 0 && (
+        <Collapsible className="w-full mt-2 pt-2 border-t border-dashed border-muted-foreground/20">
+          <CollapsibleTrigger className="flex items-center gap-1 text-[10px] text-muted-foreground/60 font-medium hover:text-muted-foreground transition-colors w-full group">
+            <ChevronRight className="h-3 w-3 transition-transform group-data-[state=open]:rotate-90" />
+            Output — {d.outputColumns.length} columns
+          </CollapsibleTrigger>
+          <CollapsibleContent className="mt-1">
+            <ColumnList
+              columns={d.outputColumns}
+              tableColorMap={d.tableColorMap}
+              showSourceLabel
+              maxVisible={999}
+            />
+          </CollapsibleContent>
+        </Collapsible>
       )}
 
       <Handle

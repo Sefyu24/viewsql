@@ -71,9 +71,12 @@ function estimateNodeSize(node: FlowNode): { width: number; height: number } {
     case "aggregation":
       rows = node.data.groupByColumns.length + node.data.aggregates.length + 1;
       break;
-    case "join":
-      // Venn diagram node — compact and square-ish
-      return { width: 160, height: 120 };
+    case "join": {
+      // Venn diagram + label + condition + collapsed "Output — N columns" trigger
+      const baseHeight = 100;
+      const hasColumns = (node.data.outputColumns?.length ?? 0) > 0;
+      return { width: WIDE_WIDTH, height: baseHeight + (hasColumns ? 28 : 0) + HEIGHT_BUFFER };
+    }
     case "filter":
       // Funnel node — compact like the join node
       return { width: 160, height: 110 };
