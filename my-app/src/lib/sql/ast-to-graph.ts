@@ -88,6 +88,10 @@ class FlowGraphBuilder {
   /** Maps table name → color palette index */
   private tableColorMap = new Map<string, number>();
   private tableColorCounter = 0;
+  /** Column references found in the current SELECT being processed */
+  private currentRefs = new Map<string, Set<string>>();
+  /** Whether the current SELECT uses an unqualified SELECT * */
+  private currentShowAll = false;
 
   constructor(schema?: SchemaTable[]) {
     this.schemaMap = new Map(
@@ -129,6 +133,110 @@ class FlowGraphBuilder {
       sourceColumn: col.name,
       dataType: col.dataType,
     }));
+  }
+
+  /**
+   * Collect all column references from a SELECT statement.
+   *
+   * Walks the SELECT list, JOIN ON conditions, WHERE, GROUP BY,
+   * and ORDER BY to determine which columns are actually used.
+   * Sets `currentRefs` and `currentShowAll` for use by `filterColumns`.
+   *
+   * @param select - The SELECT statement AST node to analyze.
+   */
+  private collectReferencedColumns(select: SelectFromStatement): void {
+    this.currentRefs = new Map();
+    this.currentShowAll = false;
+
+    const allRefs: { table?: string; column: string }[] = [];
+
+    // SELECT columns
+    for (const col of select.columns ?? []) {
+      if (col.expr) {
+        if (col.expr.type === "ref" && col.expr.name === "*" && !col.expr.table) {
+          this.currentShowAll = true;
+          return;
+        }
+        allRefs.push(...extractColumnRefs(col.expr));
+      }
+    }
+
+    // JOIN ON conditions
+    for (const item of select.from ?? []) {
+      if (item.type === "table") {
+        const tableFrom = item as FromTable;
+        if (tableFrom.join?.on) {
+          allRefs.push(...extractColumnRefs(tableFrom.join.on));
+        }
+      }
+    }
+
+    // WHERE
+    if (select.where) {
+      allRefs.push(...extractColumnRefs(select.where));
+    }
+
+    // GROUP BY
+    for (const g of (select.groupBy ?? []) as Expr[]) {
+      allRefs.push(...extractColumnRefs(g));
+    }
+
+    // ORDER BY
+    for (const o of select.orderBy ?? []) {
+      allRefs.push(...extractColumnRefs(o.by));
+    }
+
+    // Build lookup map: table/alias → Set of column names
+    for (const ref of allRefs) {
+      if (ref.column === "*") {
+        if (ref.table) {
+          this.currentRefs.set(ref.table, new Set(["*"]));
+        } else {
+          this.currentShowAll = true;
+          return;
+        }
+        continue;
+      }
+      const key = ref.table ?? "__unqualified__";
+      const existing = this.currentRefs.get(key) ?? new Set();
+      existing.add(ref.column);
+      this.currentRefs.set(key, existing);
+    }
+  }
+
+  /**
+   * Filter schema columns to only those referenced in the current query.
+   *
+   * If the query uses SELECT *, all columns are returned.
+   * If a specific table uses t.*, all columns for that table are returned.
+   * Unqualified column references (no table prefix) match against any table
+   * that has a column with that name.
+   *
+   * @param columns - Full list of columns from the schema.
+   * @param tableName - The table's actual name.
+   * @param alias - The table's alias in the query, if any.
+   * @returns Filtered list of columns actually used in the query.
+   */
+  private filterColumns(
+    columns: ColumnRef[],
+    tableName: string,
+    alias?: string
+  ): ColumnRef[] {
+    if (this.currentShowAll) return columns;
+
+    const byAlias = alias ? this.currentRefs.get(alias) : undefined;
+    const byName = this.currentRefs.get(tableName);
+    const unqualified = this.currentRefs.get("__unqualified__");
+
+    // t.* or tableName.* — show all columns
+    if (byAlias?.has("*") || byName?.has("*")) return columns;
+
+    return columns.filter((col) => {
+      if (byAlias?.has(col.name)) return true;
+      if (byName?.has(col.name)) return true;
+      if (unqualified?.has(col.name)) return true;
+      return false;
+    });
   }
 
   /**
@@ -206,6 +314,9 @@ class FlowGraphBuilder {
    * and return the ID of the last node in the chain.
    */
   private processSelectInner(select: SelectFromStatement): string | null {
+    // Pre-collect all column references so table nodes only show used columns
+    this.collectReferencedColumns(select);
+
     let lastNodeId: string | null = null;
 
     // 1. Process FROM clause (tables + joins)
@@ -286,7 +397,11 @@ class FlowGraphBuilder {
       } else {
         // Regular table source — assign a unique color
         const tableId = this.nextId("table");
-        const columns = this.getSchemaColumns(tableName);
+        const columns = this.filterColumns(
+          this.getSchemaColumns(tableName),
+          tableName,
+          alias
+        );
         const colorIndex = this.tableColorCounter++;
         this.tableColorMap.set(tableName, colorIndex);
         if (alias) this.tableColorMap.set(alias, colorIndex);

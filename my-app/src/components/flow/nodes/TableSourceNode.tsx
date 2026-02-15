@@ -24,7 +24,9 @@ export function TableSourceNode({ data }: NodeProps) {
       headerColorClass={color.header}
       showInput={false}
     >
-      {d.columns.length > 0 && <ColumnList columns={d.columns} />}
+      {d.columns.length > 0 && (
+        <ColumnList columns={d.columns} showSourceLabel={false} />
+      )}
     </FlowNodeShell>
   );
 }
