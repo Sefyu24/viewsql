@@ -75,8 +75,8 @@ function estimateNodeSize(node: FlowNode): { width: number; height: number } {
       // Venn diagram node — compact and square-ish
       return { width: 160, height: 120 };
     case "filter":
-      rows = 2;
-      break;
+      // Funnel node — compact like the join node
+      return { width: 160, height: 110 };
   }
 
   return {

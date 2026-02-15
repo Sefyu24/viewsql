@@ -7,12 +7,16 @@ import type { JoinData } from "@/lib/sql/types";
 /**
  * SVG Venn diagram representing a SQL JOIN.
  *
- * Two overlapping circles where the filled region indicates the join type:
- * - INNER: only the intersection
- * - LEFT:  entire left circle (including intersection)
- * - RIGHT: entire right circle (including intersection)
- * - FULL:  both circles entirely
- * - CROSS: both circles entirely (cartesian product)
+ * Uses diagonal line hatching instead of solid fills so the selected
+ * regions are visually distinct without being heavy:
+ * - INNER: only the intersection hatched
+ * - LEFT:  entire left circle hatched
+ * - RIGHT: entire right circle hatched
+ * - FULL:  both circles hatched
+ * - CROSS: both circles hatched
+ *
+ * The intersection region uses a denser cross-hatch to stand out from
+ * the single-direction hatching on the outer regions.
  */
 function VennDiagram({ joinType }: { joinType: JoinData["joinType"] }) {
   const id = useId();
@@ -23,52 +27,95 @@ function VennDiagram({ joinType }: { joinType: JoinData["joinType"] }) {
   const cy = 24;
   const r = 17;
 
-  const fillLeft = joinType === "LEFT" || joinType === "FULL" || joinType === "CROSS";
-  const fillRight = joinType === "RIGHT" || joinType === "FULL" || joinType === "CROSS";
-  const fillInner = joinType === "INNER";
+  const hatchLeft = joinType === "LEFT" || joinType === "FULL" || joinType === "CROSS";
+  const hatchRight = joinType === "RIGHT" || joinType === "FULL" || joinType === "CROSS";
+  const hatchInner = joinType === "INNER";
 
   return (
     <svg viewBox="0 0 72 48" className="w-[72px] h-[48px]">
       <defs>
-        {/* Clip to left circle — used to draw the intersection */}
+        {/* Diagonal lines going top-left to bottom-right */}
+        <pattern
+          id={`${id}-hatch`}
+          width="6"
+          height="6"
+          patternUnits="userSpaceOnUse"
+          patternTransform="rotate(45)"
+        >
+          <line
+            x1="0" y1="0" x2="0" y2="6"
+            className="stroke-emerald-500 dark:stroke-emerald-400"
+            strokeWidth={1.5}
+          />
+        </pattern>
+
+        {/* Cross-hatch for intersection: two diagonal directions */}
+        <pattern
+          id={`${id}-crosshatch`}
+          width="6"
+          height="6"
+          patternUnits="userSpaceOnUse"
+        >
+          <line
+            x1="0" y1="0" x2="6" y2="6"
+            className="stroke-emerald-500 dark:stroke-emerald-400"
+            strokeWidth={1.2}
+          />
+          <line
+            x1="6" y1="0" x2="0" y2="6"
+            className="stroke-emerald-500 dark:stroke-emerald-400"
+            strokeWidth={1.2}
+          />
+        </pattern>
+
+        {/* Clip paths for circle regions */}
         <clipPath id={`${id}-clip-left`}>
           <circle cx={leftCx} cy={cy} r={r} />
         </clipPath>
-        {/* Clip to right circle */}
         <clipPath id={`${id}-clip-right`}>
           <circle cx={rightCx} cy={cy} r={r} />
         </clipPath>
       </defs>
 
-      {/* Left circle fill */}
-      {fillLeft && (
-        <circle cx={leftCx} cy={cy} r={r} className="fill-emerald-200 dark:fill-emerald-900/60" />
-      )}
-
-      {/* Right circle fill */}
-      {fillRight && (
-        <circle cx={rightCx} cy={cy} r={r} className="fill-emerald-200 dark:fill-emerald-900/60" />
-      )}
-
-      {/* INNER only: draw right circle clipped to left circle = intersection */}
-      {fillInner && (
+      {/* Left circle hatching (excluding intersection for LEFT — intersection gets cross-hatch) */}
+      {hatchLeft && (
         <circle
-          cx={rightCx}
+          cx={leftCx}
           cy={cy}
           r={r}
-          clipPath={`url(#${id}-clip-left)`}
-          className="fill-emerald-300 dark:fill-emerald-800/80"
+          fill={`url(#${id}-hatch)`}
         />
       )}
 
-      {/* Darker intersection overlay for LEFT/RIGHT/FULL to show the overlap */}
-      {(fillLeft || fillRight) && (
+      {/* Right circle hatching */}
+      {hatchRight && (
+        <circle
+          cx={rightCx}
+          cy={cy}
+          r={r}
+          fill={`url(#${id}-hatch)`}
+        />
+      )}
+
+      {/* Cross-hatch on intersection for LEFT/RIGHT/FULL to show overlap is denser */}
+      {(hatchLeft || hatchRight) && (
         <circle
           cx={rightCx}
           cy={cy}
           r={r}
           clipPath={`url(#${id}-clip-left)`}
-          className="fill-emerald-300/50 dark:fill-emerald-700/40"
+          fill={`url(#${id}-crosshatch)`}
+        />
+      )}
+
+      {/* INNER only: cross-hatch just the intersection */}
+      {hatchInner && (
+        <circle
+          cx={rightCx}
+          cy={cy}
+          r={r}
+          clipPath={`url(#${id}-clip-left)`}
+          fill={`url(#${id}-crosshatch)`}
         />
       )}
 
@@ -96,7 +143,7 @@ function VennDiagram({ joinType }: { joinType: JoinData["joinType"] }) {
 /**
  * Flow node representing a JOIN operation as a Venn diagram.
  *
- * The filled region of the Venn communicates INNER/LEFT/RIGHT/FULL visually.
+ * Hatched regions show which rows are included in the join result.
  * The join type label and ON condition are shown below the diagram.
  */
 export function JoinNode({ data }: NodeProps) {
