@@ -65,8 +65,8 @@ function estimateNodeSize(node: FlowNode): { width: number; height: number } {
       rows = node.data.groupByColumns.length + node.data.aggregates.length + 1;
       break;
     case "join":
-      rows = 3;
-      break;
+      // Venn diagram node is more compact and square-ish
+      return { width: 150, height: 100 };
     case "filter":
       rows = 2;
       break;
