@@ -50,14 +50,17 @@ export function ProjectWorkspace({
   const [dataGenOpen, setDataGenOpen] = useState(false);
 
   // Introspect schema once PGlite is ready
-  useEffect(() => {
+  const refreshSchema = useCallback(async () => {
     if (!db) return;
     setSchemaLoading(true);
-    introspectSchema(db).then((result) => {
-      setSchema(result.tables);
-      setSchemaLoading(false);
-    });
+    const result = await introspectSchema(db);
+    setSchema(result.tables);
+    setSchemaLoading(false);
   }, [db]);
+
+  useEffect(() => {
+    refreshSchema();
+  }, [refreshSchema]);
 
   /**
    * Execute the current SQL query against PGlite.
@@ -126,6 +129,7 @@ export function ProjectWorkspace({
           <DataGenPanel
             schema={schema}
             onClose={() => setDataGenOpen(false)}
+            onDataGenerated={refreshSchema}
           />
         </SheetContent>
       </Sheet>

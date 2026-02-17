@@ -16,24 +16,41 @@ import {
 } from "@/components/ui/select";
 import { ChatMessageBubble } from "./chat-message";
 import { AI_MODELS, SUGGESTIONS, type AIModel, type ChatMessage } from "./types";
+import { usePGliteContext } from "@/providers/pglite-provider";
 import type { SchemaTable } from "@/lib/sql/introspect";
+import type { DataGenConfig, DataGenResult } from "@/lib/data-gen/types";
+
+function formatExecutionResult(result: DataGenResult): string {
+  if (result.errors.length > 0 && result.tablesInserted.length === 0) {
+    return `Data generation failed:\n${result.errors.map((e) => `- ${e.tableName}: ${e.error}`).join("\n")}`;
+  }
+  const summary = result.tablesInserted
+    .map((t) => `- ${t.tableName}: ${t.rowCount} rows`)
+    .join("\n");
+  const errorPart =
+    result.errors.length > 0
+      ? `\n\nPartial errors:\n${result.errors.map((e) => `- ${e.tableName}: ${e.error}`).join("\n")}`
+      : "";
+  return `Inserted ${result.totalRows} rows in ${result.durationMs}ms:\n${summary}${errorPart}\n\nYou can now query the data in the SQL editor.`;
+}
 
 /**
  * Data generation chat panel.
  *
- * A sidebar where users describe what test data they want in natural language.
- * The AI generates faker.js configurations based on the database schema context.
- *
- * @param schema - The current database schema for context.
- * @param onClose - Callback to close the panel.
+ * Users describe what test data they want in natural language.
+ * Claude generates a faker.js config, which is executed client-side
+ * to INSERT rows into PGlite.
  */
 export function DataGenPanel({
   schema,
   onClose,
+  onDataGenerated,
 }: {
   schema: SchemaTable[];
   onClose?: () => void;
+  onDataGenerated?: () => void;
 }) {
+  const { db } = usePGliteContext();
   const [messages, setMessages] = useState<ChatMessage[]>([
     {
       id: "welcome",
@@ -45,6 +62,10 @@ export function DataGenPanel({
   const [input, setInput] = useState("");
   const [model, setModel] = useState<AIModel>("sonnet");
   const [isGenerating, setIsGenerating] = useState(false);
+  const [isExecuting, setIsExecuting] = useState(false);
+  const [conversationHistory, setConversationHistory] = useState<
+    { role: "user" | "assistant"; content: string }[]
+  >([]);
   const scrollRef = useRef<HTMLDivElement>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
 
@@ -70,20 +91,85 @@ export function DataGenPanel({
       setInput("");
       setIsGenerating(true);
 
-      // TODO: Replace with actual LLM API call
-      // For now, simulate a response
-      setTimeout(() => {
+      const newHistory = [
+        ...conversationHistory,
+        { role: "user" as const, content: text.trim() },
+      ];
+
+      try {
+        const response = await fetch("/api/generate-data", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ messages: newHistory, schema, model }),
+        });
+
+        if (!response.ok) {
+          const err = await response.json();
+          throw new Error(err.error || `API error: ${response.status}`);
+        }
+
+        const data = await response.json();
+
         const aiMsg: ChatMessage = {
           id: `ai-${Date.now()}`,
           role: "assistant",
-          content: `I'll generate data based on your request. Here's what I'll configure:\n\n${schema.map((t) => `• ${t.name}: 50 rows`).join("\n")}\n\nThe data generation config will appear here once the LLM integration is connected. For now, this is a placeholder response.`,
+          content: data.content || "Here's your data generation config.",
           timestamp: Date.now(),
+          dataGenConfig: data.config ?? undefined,
         };
         setMessages((prev) => [...prev, aiMsg]);
+        setConversationHistory([
+          ...newHistory,
+          { role: "assistant", content: data.content || "" },
+        ]);
+      } catch (error) {
+        const errorMsg: ChatMessage = {
+          id: `error-${Date.now()}`,
+          role: "assistant",
+          content: `Error: ${error instanceof Error ? error.message : "Something went wrong"}`,
+          timestamp: Date.now(),
+        };
+        setMessages((prev) => [...prev, errorMsg]);
+      } finally {
         setIsGenerating(false);
-      }, 1000);
+      }
     },
-    [isGenerating, schema]
+    [isGenerating, schema, model, conversationHistory]
+  );
+
+  const executeConfig = useCallback(
+    async (config: DataGenConfig) => {
+      if (!db || isExecuting) return;
+      setIsExecuting(true);
+
+      try {
+        const { executeDataGen } = await import("@/lib/data-gen/faker-engine");
+        const result = await executeDataGen(config, db, schema);
+
+        const resultMsg: ChatMessage = {
+          id: `result-${Date.now()}`,
+          role: "assistant",
+          content: formatExecutionResult(result),
+          timestamp: Date.now(),
+        };
+        setMessages((prev) => [...prev, resultMsg]);
+
+        if (result.tablesInserted.length > 0) {
+          onDataGenerated?.();
+        }
+      } catch (error) {
+        const errorMsg: ChatMessage = {
+          id: `exec-error-${Date.now()}`,
+          role: "assistant",
+          content: `Execution failed: ${error instanceof Error ? error.message : String(error)}`,
+          timestamp: Date.now(),
+        };
+        setMessages((prev) => [...prev, errorMsg]);
+      } finally {
+        setIsExecuting(false);
+      }
+    },
+    [db, schema, isExecuting, onDataGenerated]
   );
 
   const handleKeyDown = (e: React.KeyboardEvent) => {
@@ -103,6 +189,7 @@ export function DataGenPanel({
       },
     ]);
     setInput("");
+    setConversationHistory([]);
   };
 
   return (
@@ -145,9 +232,18 @@ export function DataGenPanel({
       <ScrollArea className="flex-1 px-4" ref={scrollRef}>
         <div className="space-y-4 py-4">
           {messages.map((msg) => (
-            <ChatMessageBubble key={msg.id} message={msg} />
+            <ChatMessageBubble
+              key={msg.id}
+              message={msg}
+              onExecute={
+                msg.dataGenConfig
+                  ? () => executeConfig(msg.dataGenConfig!)
+                  : undefined
+              }
+              isExecuting={isExecuting}
+            />
           ))}
-          {isGenerating && (
+          {(isGenerating || isExecuting) && (
             <div className="flex gap-2">
               <div className="h-6 w-6 shrink-0" />
               <div className="rounded-lg bg-muted px-3 py-2 text-xs text-muted-foreground">
@@ -155,6 +251,9 @@ export function DataGenPanel({
                   <span className="animate-bounce" style={{ animationDelay: "0ms" }}>·</span>
                   <span className="animate-bounce" style={{ animationDelay: "150ms" }}>·</span>
                   <span className="animate-bounce" style={{ animationDelay: "300ms" }}>·</span>
+                </span>
+                <span className="ml-2">
+                  {isExecuting ? "Inserting data..." : "Thinking..."}
                 </span>
               </div>
             </div>
@@ -202,7 +301,7 @@ export function DataGenPanel({
             size="icon"
             className="h-9 w-9 shrink-0"
             onClick={() => sendMessage(input)}
-            disabled={!input.trim() || isGenerating}
+            disabled={!input.trim() || isGenerating || isExecuting}
           >
             <Send className="h-3.5 w-3.5" />
           </Button>

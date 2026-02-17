@@ -1,6 +1,8 @@
 "use client";
 
+import { Play } from "lucide-react";
 import { Avatar, AvatarFallback } from "@/components/ui/avatar";
+import { Button } from "@/components/ui/button";
 import type { ChatMessage } from "./types";
 
 /**
@@ -8,8 +10,17 @@ import type { ChatMessage } from "./types";
  *
  * User messages align right with a blue accent.
  * Assistant messages align left with a neutral background.
+ * Messages with a dataGenConfig show a compact summary and a "Generate Data" button.
  */
-export function ChatMessageBubble({ message }: { message: ChatMessage }) {
+export function ChatMessageBubble({
+  message,
+  onExecute,
+  isExecuting,
+}: {
+  message: ChatMessage;
+  onExecute?: () => void;
+  isExecuting?: boolean;
+}) {
   const isUser = message.role === "user";
 
   return (
@@ -33,7 +44,34 @@ export function ChatMessageBubble({ message }: { message: ChatMessage }) {
             : "bg-muted text-foreground"
         }`}
       >
-        {message.content}
+        <p className="whitespace-pre-wrap">{message.content}</p>
+
+        {/* Config preview + execute button */}
+        {message.dataGenConfig && (
+          <div className="mt-2 space-y-2">
+            <div className="rounded border bg-background/50 p-2 text-[10px] font-mono">
+              {message.dataGenConfig.tables.map((t) => (
+                <div key={t.tableName}>
+                  <span className="font-semibold">{t.tableName}</span>
+                  <span className="text-muted-foreground">
+                    {" "}&mdash; {t.rowCount} rows, {t.columns.length} columns
+                  </span>
+                </div>
+              ))}
+            </div>
+            {onExecute && (
+              <Button
+                size="sm"
+                className="h-7 gap-1.5 text-xs w-full"
+                onClick={onExecute}
+                disabled={isExecuting}
+              >
+                <Play className="h-3 w-3" />
+                {isExecuting ? "Generating..." : "Generate Data"}
+              </Button>
+            )}
+          </div>
+        )}
       </div>
     </div>
   );

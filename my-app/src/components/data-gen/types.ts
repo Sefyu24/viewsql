@@ -1,9 +1,13 @@
+import type { DataGenConfig } from "@/lib/data-gen/types";
+
 /** A single message in the data generation chat */
 export type ChatMessage = {
   id: string;
   role: "user" | "assistant";
   content: string;
   timestamp: number;
+  /** Present when the AI returns a data generation config */
+  dataGenConfig?: DataGenConfig;
 };
 
 /** Available AI models for data generation */
