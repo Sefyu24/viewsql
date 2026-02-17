@@ -4,3 +4,7 @@ CLAUDE.md
 
 # Test files
 test/
+test_data_gen/
+
+# PGlite WASM (copied from node_modules by postinstall)
+my-app/public/pglite/

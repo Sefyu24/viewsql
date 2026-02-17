@@ -1,11 +1,21 @@
-import ELK, { type ElkNode, type ElkExtendedEdge } from "elkjs/lib/elk.bundled.js";
+import type { ELK, ElkNode, ElkExtendedEdge } from "elkjs/lib/elk-api";
 import type { FlowGraph, FlowNode } from "@/lib/sql/types";
 
-/** Lazy-initialized ELK instance to avoid WASM compile-from-read-Response errors in Turbopack */
-let elk: InstanceType<typeof ELK> | null = null;
-function getElk(): InstanceType<typeof ELK> {
-  if (!elk) elk = new ELK();
-  return elk;
+/**
+ * Lazily load and instantiate ELK via dynamic import.
+ *
+ * The static `import ELK from "elkjs/lib/elk.bundled.js"` causes the WASM
+ * module to be compiled at module evaluation time, which fails in Turbopack
+ * when the fetch Response backing the WASM binary has already been consumed.
+ * Dynamic import defers loading until the first layout request.
+ */
+let elkInstance: ELK | null = null;
+async function getElk(): Promise<ELK> {
+  if (!elkInstance) {
+    const ELKConstructor = (await import("elkjs/lib/elk.bundled.js")).default;
+    elkInstance = new ELKConstructor();
+  }
+  return elkInstance;
 }
 
 /** Estimated node width for compact nodes (join, filter, aggregation) */
@@ -195,7 +205,8 @@ export async function computeLayout(
     edges: rootEdges,
   };
 
-  const layoutResult = await getElk().layout(elkGraph);
+  const elk = await getElk();
+  const layoutResult = await elk.layout(elkGraph);
 
   const positions = new Map<
     string,

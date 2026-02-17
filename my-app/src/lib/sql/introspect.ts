@@ -46,14 +46,18 @@ export async function introspectSchema(
         data_type: string;
         is_nullable: string;
         column_default: string | null;
-      }>(`
+      }>(
+        `
         SELECT column_name, data_type, is_nullable, column_default
         FROM information_schema.columns
         WHERE table_schema = 'public' AND table_name = $1
         ORDER BY ordinal_position
-      `, [row.table_name]);
+      `,
+        [row.table_name]
+      );
 
-      const pkResult = await db.query<{ column_name: string }>(`
+      const pkResult = await db.query<{ column_name: string }>(
+        `
         SELECT kcu.column_name
         FROM information_schema.table_constraints tc
         JOIN information_schema.key_column_usage kcu
@@ -62,14 +66,17 @@ export async function introspectSchema(
         WHERE tc.table_schema = 'public'
           AND tc.table_name = $1
           AND tc.constraint_type = 'PRIMARY KEY'
-      `, [row.table_name]);
+      `,
+        [row.table_name]
+      );
       const pkColumns = new Set(pkResult.rows.map((r) => r.column_name));
 
       const fkResult = await db.query<{
         column_name: string;
         foreign_table: string;
         foreign_column: string;
-      }>(`
+      }>(
+        `
         SELECT
           kcu.column_name,
           ccu.table_name AS foreign_table,
@@ -84,7 +91,9 @@ export async function introspectSchema(
         WHERE tc.table_schema = 'public'
           AND tc.table_name = $1
           AND tc.constraint_type = 'FOREIGN KEY'
-      `, [row.table_name]);
+      `,
+        [row.table_name]
+      );
       const fkMap = new Map(
         fkResult.rows.map((r) => [
           r.column_name,

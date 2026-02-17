@@ -1,6 +1,7 @@
 "use client";
 
 import { useParams } from "next/navigation";
+import { useState, useEffect } from "react";
 import { useQuery } from "convex/react";
 import { api } from "../../../../../convex/_generated/api";
 import { Id } from "../../../../../convex/_generated/dataModel";
@@ -16,7 +17,14 @@ export default function ProjectPage() {
     id: id as Id<"projects">,
   });
 
-  if (project === undefined) {
+  // Track whether we've ever successfully loaded this project.
+  // Prevents a brief "not found" flash during Convex reconnection on refresh.
+  const [hasLoaded, setHasLoaded] = useState(false);
+  useEffect(() => {
+    if (project && project !== undefined) setHasLoaded(true);
+  }, [project]);
+
+  if (project === undefined || (!hasLoaded && project === null)) {
     return (
       <div className="flex min-h-screen items-center justify-center">
         <Skeleton className="h-12 w-48" />

@@ -1,17 +1,25 @@
 "use client";
 
 import { useState, useCallback, useEffect } from "react";
+import { Sparkles } from "lucide-react";
 import {
   ResizablePanelGroup,
   ResizablePanel,
   ResizableHandle,
 } from "@/components/ui/resizable";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import { Button } from "@/components/ui/button";
+import {
+  Sheet,
+  SheetContent,
+  SheetTitle,
+} from "@/components/ui/sheet";
 import { SqlEditor } from "@/components/sql-editor";
 import { QueryToolbar } from "@/components/query-toolbar";
 import { ResultsTable, type QueryResult } from "@/components/results-table";
 import { QueryFlowCanvas } from "@/components/flow/QueryFlowCanvas";
 import { SchemaSidebar } from "@/components/schema-sidebar";
+import { DataGenPanel } from "@/components/data-gen/data-gen-panel";
 import { usePGliteContext } from "@/providers/pglite-provider";
 import { introspectSchema, type SchemaTable } from "@/lib/sql/introspect";
 
@@ -39,6 +47,7 @@ export function ProjectWorkspace({
   const [queryError, setQueryError] = useState<string | null>(null);
   const [flowError, setFlowError] = useState<string | null>(null);
   const [activeTab, setActiveTab] = useState("visualize");
+  const [dataGenOpen, setDataGenOpen] = useState(false);
 
   // Introspect schema once PGlite is ready
   useEffect(() => {
@@ -97,7 +106,29 @@ export function ProjectWorkspace({
       {/* Header */}
       <div className="flex items-center border-b px-4 py-2">
         <h1 className="text-sm font-semibold">{projectName}</h1>
+        <div className="ml-auto">
+          <Button
+            variant="outline"
+            size="sm"
+            className="h-7 gap-1.5 text-xs"
+            onClick={() => setDataGenOpen(true)}
+          >
+            <Sparkles className="h-3.5 w-3.5 text-amber-500" />
+            Generate Data
+          </Button>
+        </div>
       </div>
+
+      {/* Data generation chat panel */}
+      <Sheet open={dataGenOpen} onOpenChange={setDataGenOpen}>
+        <SheetContent side="left" className="w-[400px] sm:max-w-[440px] p-0" showCloseButton={false}>
+          <SheetTitle className="sr-only">Generate Test Data</SheetTitle>
+          <DataGenPanel
+            schema={schema}
+            onClose={() => setDataGenOpen(false)}
+          />
+        </SheetContent>
+      </Sheet>
 
       {/* Main content */}
       <ResizablePanelGroup orientation="horizontal" className="flex-1">
