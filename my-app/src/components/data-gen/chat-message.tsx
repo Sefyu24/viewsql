@@ -2,7 +2,6 @@
 
 import type { UIMessage } from "ai";
 import Markdown from "react-markdown";
-import { Sparkles } from "lucide-react";
 import { ConfigPreviewCard } from "./config-preview-card";
 import { ResultsSummaryCard } from "./results-summary-card";
 import { SuggestionChips } from "./suggestion-chips";
@@ -57,7 +56,7 @@ const markdownComponents = {
     </code>
   ),
   pre: ({ children }: { children?: React.ReactNode }) => (
-    <pre className="my-2 p-3 bg-accent rounded-md text-xs overflow-x-auto font-mono">
+    <pre className="my-2 p-3 bg-accent rounded-md text-xs overflow-x-auto max-w-full font-mono whitespace-pre">
       {children}
     </pre>
   ),
@@ -131,17 +130,12 @@ export function ChatMessageBubble({
     );
   }
 
-  /* ── Assistant message: full-width, no bubble ── */
+  /* ── Assistant message: full-width ── */
   return (
-    <div className="flex gap-3">
-      <div className="mt-1 flex h-6 w-6 shrink-0 items-center justify-center rounded-full bg-gradient-to-br from-amber-400 to-orange-500">
-        <Sparkles className="h-3.5 w-3.5 text-white" />
-      </div>
-
-      <div className="flex-1 min-w-0 text-sm text-foreground">
+    <div className="overflow-hidden text-sm text-foreground">
         {/* Text content */}
         {textContent && (
-          <div className="[&>*:first-child]:mt-0 [&>*:last-child]:mb-0">
+          <div className="break-words [&>*:first-child]:mt-0 [&>*:last-child]:mb-0">
             <Markdown components={markdownComponents}>{textContent}</Markdown>
             {isStreaming && (
               <span className="animate-pulse ml-0.5 text-muted-foreground">
@@ -196,7 +190,6 @@ export function ChatMessageBubble({
             disabled={isExecuting || isStreaming}
           />
         )}
-      </div>
     </div>
   );
 }

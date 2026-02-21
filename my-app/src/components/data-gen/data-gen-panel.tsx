@@ -7,7 +7,6 @@ import { DefaultChatTransport } from "ai";
 import type { UIMessage } from "ai";
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
-import { ScrollArea } from "@/components/ui/scroll-area";
 import {
   Select,
   SelectContent,
@@ -222,15 +221,12 @@ export function DataGenPanel({
       />
 
       {/* Messages */}
-      <ScrollArea className="flex-1 min-h-0 px-4" ref={scrollRef}>
+      <div className="flex-1 min-h-0 overflow-y-auto px-4" ref={scrollRef}>
         <div className="space-y-4 py-4">
           {/* Welcome message */}
           {showWelcome && (
-            <div className="flex gap-3">
-              <div className="mt-1 flex h-6 w-6 shrink-0 items-center justify-center rounded-full bg-gradient-to-br from-amber-400 to-orange-500">
-                <Sparkles className="h-3.5 w-3.5 text-white" />
-              </div>
-              <div className="flex-1 text-sm text-foreground">
+            <div>
+              <div className="text-sm text-foreground">
                 <p className="leading-relaxed">
                   I can help you generate test data for your{" "}
                   <strong className="font-semibold">{schema.length} table{schema.length !== 1 ? "s" : ""}</strong>.
@@ -269,12 +265,7 @@ export function DataGenPanel({
 
           {/* Execution progress */}
           {isExecuting && executionProgress && (
-            <div className="flex gap-3">
-              <div className="h-6 w-6 shrink-0" />
-              <div className="flex-1">
-                <ExecutionProgressView progress={executionProgress} />
-              </div>
-            </div>
+            <ExecutionProgressView progress={executionProgress} />
           )}
 
           {/* Streaming indicator */}
@@ -284,24 +275,21 @@ export function DataGenPanel({
               const hasText = lastMsg?.role === "assistant" && lastMsg.parts?.some((p) => p.type === "text" && p.text);
               if (hasText) return null;
               return (
-                <div className="flex gap-3">
-                  <div className="h-6 w-6 shrink-0" />
-                  <div className="text-sm text-muted-foreground">
-                    <span className="inline-flex gap-1">
-                      <span className="animate-bounce" style={{ animationDelay: "0ms" }}>·</span>
-                      <span className="animate-bounce" style={{ animationDelay: "150ms" }}>·</span>
-                      <span className="animate-bounce" style={{ animationDelay: "300ms" }}>·</span>
-                    </span>
-                    <span className="ml-2">
-                      Analyzing your {schema.length}-table schema...
-                    </span>
-                  </div>
+                <div className="text-sm text-muted-foreground">
+                  <span className="inline-flex gap-1">
+                    <span className="animate-bounce" style={{ animationDelay: "0ms" }}>·</span>
+                    <span className="animate-bounce" style={{ animationDelay: "150ms" }}>·</span>
+                    <span className="animate-bounce" style={{ animationDelay: "300ms" }}>·</span>
+                  </span>
+                  <span className="ml-2">
+                    Analyzing your {schema.length}-table schema...
+                  </span>
                 </div>
               );
             })()
           )}
         </div>
-      </ScrollArea>
+      </div>
 
       {/* Input */}
       <div className="border-t px-4 py-3">
