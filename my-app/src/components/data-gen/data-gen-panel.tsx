@@ -1,12 +1,13 @@
 "use client";
 
-import { useState, useRef, useEffect, useCallback } from "react";
+import { useState, useRef, useEffect, useCallback, useMemo } from "react";
 import { Send, Plus, Sparkles } from "lucide-react";
+import { useChat } from "@ai-sdk/react";
+import { DefaultChatTransport } from "ai";
+import type { UIMessage } from "ai";
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
 import { ScrollArea } from "@/components/ui/scroll-area";
-import { Badge } from "@/components/ui/badge";
-import { Separator } from "@/components/ui/separator";
 import {
   Select,
   SelectContent,
@@ -15,31 +16,22 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { ChatMessageBubble } from "./chat-message";
-import { AI_MODELS, SUGGESTIONS, type AIModel, type ChatMessage } from "./types";
+import { SchemaMiniMap } from "./schema-mini-map";
+import { ContextBar } from "./context-bar";
+import { SuggestionChips } from "./suggestion-chips";
+import { ExecutionProgressView } from "./execution-progress";
+import { AI_MODELS, SUGGESTIONS, type AIModel, type ExecutionState } from "./types";
+import type { ExecutionProgress } from "@/lib/data-gen/types";
+import type { DataGenConfig } from "@/lib/data-gen/types";
 import { usePGliteContext } from "@/providers/pglite-provider";
 import type { SchemaTable } from "@/lib/sql/introspect";
-import type { DataGenConfig, DataGenResult } from "@/lib/data-gen/types";
-
-function formatExecutionResult(result: DataGenResult): string {
-  if (result.errors.length > 0 && result.tablesInserted.length === 0) {
-    return `Data generation failed:\n${result.errors.map((e) => `- ${e.tableName}: ${e.error}`).join("\n")}`;
-  }
-  const summary = result.tablesInserted
-    .map((t) => `- ${t.tableName}: ${t.rowCount} rows`)
-    .join("\n");
-  const errorPart =
-    result.errors.length > 0
-      ? `\n\nPartial errors:\n${result.errors.map((e) => `- ${e.tableName}: ${e.error}`).join("\n")}`
-      : "";
-  return `Inserted ${result.totalRows} rows in ${result.durationMs}ms:\n${summary}${errorPart}\n\nYou can now query the data in the SQL editor.`;
-}
 
 /**
  * Data generation chat panel.
  *
  * Users describe what test data they want in natural language.
- * Claude generates a faker.js config, which is executed client-side
- * to INSERT rows into PGlite.
+ * Claude generates a faker.js config (streamed via AI SDK), which is
+ * executed client-side to INSERT rows into PGlite.
  */
 export function DataGenPanel({
   schema,
@@ -50,147 +42,141 @@ export function DataGenPanel({
   onClose?: () => void;
   onDataGenerated?: () => void;
 }) {
-  const { db } = usePGliteContext();
-  const [messages, setMessages] = useState<ChatMessage[]>([
-    {
-      id: "welcome",
-      role: "assistant",
-      content: `I can help you generate test data for your database. You have ${schema.length} table${schema.length !== 1 ? "s" : ""}: ${schema.map((t) => t.name).join(", ")}. Describe what kind of data you need, or pick a suggestion below.`,
-      timestamp: Date.now(),
-    },
-  ]);
-  const [input, setInput] = useState("");
+  const { db, isLoading: pgliteLoading } = usePGliteContext();
   const [model, setModel] = useState<AIModel>("sonnet");
-  const [isGenerating, setIsGenerating] = useState(false);
+  const [input, setInput] = useState("");
   const [isExecuting, setIsExecuting] = useState(false);
-  const [conversationHistory, setConversationHistory] = useState<
-    { role: "user" | "assistant"; content: string }[]
-  >([]);
+  const [executionProgress, setExecutionProgress] = useState<ExecutionProgress | null>(null);
+  const [totalRowsGenerated, setTotalRowsGenerated] = useState(0);
+
+  // Execution results keyed by the tool call ID that produced the config
+  const [executionResults, setExecutionResults] = useState<Map<string, ExecutionState>>(new Map());
+  // User-edited configs keyed by tool call ID
+  const [editedConfigs, setEditedConfigs] = useState<Map<string, DataGenConfig>>(new Map());
+
   const scrollRef = useRef<HTMLDivElement>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
 
-  // Auto-scroll to bottom on new messages
+  const transport = useMemo(
+    () =>
+      new DefaultChatTransport({
+        api: "/api/generate-data",
+        body: { schema, model },
+      }),
+    [schema, model]
+  );
+
+  const { messages, sendMessage, status, setMessages, stop } = useChat({
+    transport,
+  });
+
+  const isStreaming = status === "submitted" || status === "streaming";
+
+  // Auto-scroll to bottom on new messages or streaming
   useEffect(() => {
     if (scrollRef.current) {
       scrollRef.current.scrollTop = scrollRef.current.scrollHeight;
     }
-  }, [messages]);
+  }, [messages, isStreaming, executionProgress]);
 
-  const sendMessage = useCallback(
-    async (text: string) => {
-      if (!text.trim() || isGenerating) return;
-
-      const userMsg: ChatMessage = {
-        id: `user-${Date.now()}`,
-        role: "user",
-        content: text.trim(),
-        timestamp: Date.now(),
-      };
-
-      setMessages((prev) => [...prev, userMsg]);
+  const handleSend = useCallback(
+    (text: string) => {
+      if (!text.trim() || isStreaming) return;
+      sendMessage({ text: text.trim() });
       setInput("");
-      setIsGenerating(true);
-
-      const newHistory = [
-        ...conversationHistory,
-        { role: "user" as const, content: text.trim() },
-      ];
-
-      try {
-        const response = await fetch("/api/generate-data", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ messages: newHistory, schema, model }),
-        });
-
-        if (!response.ok) {
-          const err = await response.json();
-          throw new Error(err.error || `API error: ${response.status}`);
-        }
-
-        const data = await response.json();
-
-        const aiMsg: ChatMessage = {
-          id: `ai-${Date.now()}`,
-          role: "assistant",
-          content: data.content || "Here's your data generation config.",
-          timestamp: Date.now(),
-          dataGenConfig: data.config ?? undefined,
-        };
-        setMessages((prev) => [...prev, aiMsg]);
-        setConversationHistory([
-          ...newHistory,
-          { role: "assistant", content: data.content || "" },
-        ]);
-      } catch (error) {
-        const errorMsg: ChatMessage = {
-          id: `error-${Date.now()}`,
-          role: "assistant",
-          content: `Error: ${error instanceof Error ? error.message : "Something went wrong"}`,
-          timestamp: Date.now(),
-        };
-        setMessages((prev) => [...prev, errorMsg]);
-      } finally {
-        setIsGenerating(false);
-      }
     },
-    [isGenerating, schema, model, conversationHistory]
+    [isStreaming, sendMessage]
   );
 
   const executeConfig = useCallback(
-    async (config: DataGenConfig) => {
+    async (config: DataGenConfig, toolCallId: string) => {
       if (!db || isExecuting) return;
       setIsExecuting(true);
+      setExecutionProgress(null);
 
       try {
         const { executeDataGen } = await import("@/lib/data-gen/faker-engine");
-        const result = await executeDataGen(config, db, schema);
+        const result = await executeDataGen(config, db, schema, undefined, (progress) => {
+          setExecutionProgress(progress);
+        });
 
-        const resultMsg: ChatMessage = {
-          id: `result-${Date.now()}`,
-          role: "assistant",
-          content: formatExecutionResult(result),
-          timestamp: Date.now(),
-        };
-        setMessages((prev) => [...prev, resultMsg]);
+        // Fetch sample data for successful tables
+        const sampleData = new Map<string, Record<string, unknown>[]>();
+        for (const table of result.tablesInserted) {
+          const sample = await db.query<Record<string, unknown>>(
+            `SELECT * FROM "${table.tableName}" LIMIT 5`
+          );
+          sampleData.set(table.tableName, sample.rows);
+        }
+
+        setExecutionResults((prev) => {
+          const next = new Map(prev);
+          next.set(toolCallId, { result, sampleData });
+          return next;
+        });
+
+        setTotalRowsGenerated((prev) => prev + result.totalRows);
 
         if (result.tablesInserted.length > 0) {
           onDataGenerated?.();
         }
       } catch (error) {
-        const errorMsg: ChatMessage = {
-          id: `exec-error-${Date.now()}`,
-          role: "assistant",
-          content: `Execution failed: ${error instanceof Error ? error.message : String(error)}`,
-          timestamp: Date.now(),
-        };
-        setMessages((prev) => [...prev, errorMsg]);
+        setExecutionResults((prev) => {
+          const next = new Map(prev);
+          next.set(toolCallId, {
+            result: {
+              success: false,
+              tablesInserted: [],
+              errors: [{ tableName: "(all)", error: error instanceof Error ? error.message : String(error) }],
+              totalRows: 0,
+              durationMs: 0,
+            },
+          });
+          return next;
+        });
       } finally {
         setIsExecuting(false);
+        setExecutionProgress(null);
       }
     },
     [db, schema, isExecuting, onDataGenerated]
   );
 
+  const handleConfigChange = useCallback((toolCallId: string, config: DataGenConfig) => {
+    setEditedConfigs((prev) => {
+      const next = new Map(prev);
+      next.set(toolCallId, config);
+      return next;
+    });
+  }, []);
+
   const handleKeyDown = (e: React.KeyboardEvent) => {
     if (e.key === "Enter" && !e.shiftKey) {
       e.preventDefault();
-      sendMessage(input);
+      handleSend(input);
     }
   };
 
   const handleNewChat = () => {
-    setMessages([
-      {
-        id: "welcome",
-        role: "assistant",
-        content: `I can help you generate test data for your database. You have ${schema.length} table${schema.length !== 1 ? "s" : ""}: ${schema.map((t) => t.name).join(", ")}. Describe what kind of data you need, or pick a suggestion below.`,
-        timestamp: Date.now(),
-      },
-    ]);
+    stop();
+    setMessages([]);
     setInput("");
-    setConversationHistory([]);
+    setExecutionResults(new Map());
+    setEditedConfigs(new Map());
+    setExecutionProgress(null);
   };
+
+  const handleAction = useCallback(
+    (action: string) => {
+      if (action === "navigate_editor") {
+        onClose?.();
+      }
+    },
+    [onClose]
+  );
+
+  const pgliteStatus = pgliteLoading ? "loading" : db ? "active" : "error";
+  const showWelcome = messages.length === 0;
 
   return (
     <div className="flex h-full flex-col">
@@ -228,62 +214,94 @@ export function DataGenPanel({
         </div>
       </div>
 
+      {/* Context bar */}
+      <ContextBar
+        schema={schema}
+        pgliteStatus={pgliteStatus as "loading" | "active" | "error"}
+        totalRowsGenerated={totalRowsGenerated}
+      />
+
       {/* Messages */}
-      <ScrollArea className="flex-1 px-4" ref={scrollRef}>
+      <ScrollArea className="flex-1 min-h-0 px-4" ref={scrollRef}>
         <div className="space-y-4 py-4">
-          {messages.map((msg) => (
-            <ChatMessageBubble
-              key={msg.id}
-              message={msg}
-              onExecute={
-                msg.dataGenConfig
-                  ? () => executeConfig(msg.dataGenConfig!)
-                  : undefined
-              }
-              isExecuting={isExecuting}
-            />
-          ))}
-          {(isGenerating || isExecuting) && (
-            <div className="flex gap-2">
-              <div className="h-6 w-6 shrink-0" />
-              <div className="rounded-lg bg-muted px-3 py-2 text-xs text-muted-foreground">
-                <span className="inline-flex gap-1">
-                  <span className="animate-bounce" style={{ animationDelay: "0ms" }}>·</span>
-                  <span className="animate-bounce" style={{ animationDelay: "150ms" }}>·</span>
-                  <span className="animate-bounce" style={{ animationDelay: "300ms" }}>·</span>
-                </span>
-                <span className="ml-2">
-                  {isExecuting ? "Inserting data..." : "Thinking..."}
-                </span>
+          {/* Welcome message */}
+          {showWelcome && (
+            <div className="flex gap-3">
+              <div className="mt-1 flex h-6 w-6 shrink-0 items-center justify-center rounded-full bg-gradient-to-br from-amber-400 to-orange-500">
+                <Sparkles className="h-3.5 w-3.5 text-white" />
+              </div>
+              <div className="flex-1 text-sm text-foreground">
+                <p className="leading-relaxed">
+                  I can help you generate test data for your{" "}
+                  <strong className="font-semibold">{schema.length} table{schema.length !== 1 ? "s" : ""}</strong>.
+                  Describe what kind of data you need, or pick a suggestion below.
+                </p>
+                <SchemaMiniMap schema={schema} />
+                <SuggestionChips
+                  suggestions={SUGGESTIONS}
+                  onSendMessage={handleSend}
+                  onAction={handleAction}
+                  disabled={isStreaming}
+                />
               </div>
             </div>
           )}
+
+          {/* Chat messages */}
+          {messages.map((msg, index) => (
+            <ChatMessageBubble
+              key={msg.id}
+              message={msg}
+              isLastAssistant={
+                msg.role === "assistant" &&
+                index === messages.length - 1
+              }
+              isStreaming={isStreaming && msg.role === "assistant" && index === messages.length - 1}
+              executionResults={executionResults}
+              editedConfigs={editedConfigs}
+              onExecute={(config, toolCallId) => executeConfig(config, toolCallId)}
+              onConfigChange={handleConfigChange}
+              onSendMessage={handleSend}
+              onAction={handleAction}
+              isExecuting={isExecuting}
+            />
+          ))}
+
+          {/* Execution progress */}
+          {isExecuting && executionProgress && (
+            <div className="flex gap-3">
+              <div className="h-6 w-6 shrink-0" />
+              <div className="flex-1">
+                <ExecutionProgressView progress={executionProgress} />
+              </div>
+            </div>
+          )}
+
+          {/* Streaming indicator */}
+          {isStreaming && messages.length > 0 && (
+            (() => {
+              const lastMsg = messages[messages.length - 1];
+              const hasText = lastMsg?.role === "assistant" && lastMsg.parts?.some((p) => p.type === "text" && p.text);
+              if (hasText) return null;
+              return (
+                <div className="flex gap-3">
+                  <div className="h-6 w-6 shrink-0" />
+                  <div className="text-sm text-muted-foreground">
+                    <span className="inline-flex gap-1">
+                      <span className="animate-bounce" style={{ animationDelay: "0ms" }}>·</span>
+                      <span className="animate-bounce" style={{ animationDelay: "150ms" }}>·</span>
+                      <span className="animate-bounce" style={{ animationDelay: "300ms" }}>·</span>
+                    </span>
+                    <span className="ml-2">
+                      Analyzing your {schema.length}-table schema...
+                    </span>
+                  </div>
+                </div>
+              );
+            })()
+          )}
         </div>
       </ScrollArea>
-
-      {/* Suggestions */}
-      {messages.length <= 1 && (
-        <>
-          <Separator />
-          <div className="px-4 py-3">
-            <p className="text-[10px] text-muted-foreground uppercase tracking-wide font-medium mb-2">
-              Suggestions
-            </p>
-            <div className="flex flex-wrap gap-1.5">
-              {SUGGESTIONS.map((s) => (
-                <Badge
-                  key={s.label}
-                  variant="outline"
-                  className="text-[11px] cursor-pointer hover:bg-accent transition-colors"
-                  onClick={() => sendMessage(s.prompt)}
-                >
-                  {s.label}
-                </Badge>
-              ))}
-            </div>
-          </div>
-        </>
-      )}
 
       {/* Input */}
       <div className="border-t px-4 py-3">
@@ -300,8 +318,8 @@ export function DataGenPanel({
           <Button
             size="icon"
             className="h-9 w-9 shrink-0"
-            onClick={() => sendMessage(input)}
-            disabled={!input.trim() || isGenerating || isExecuting}
+            onClick={() => handleSend(input)}
+            disabled={!input.trim() || isStreaming || isExecuting}
           >
             <Send className="h-3.5 w-3.5" />
           </Button>

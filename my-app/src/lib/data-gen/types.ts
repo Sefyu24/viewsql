@@ -68,3 +68,17 @@ export type DataGenResult = {
   totalRows: number;
   durationMs: number;
 };
+
+/** Per-table progress during execution */
+export type TableProgress = {
+  tableName: string;
+  status: "pending" | "generating" | "inserting" | "done" | "error";
+  rowCount: number;
+  error?: string;
+  elapsedMs?: number;
+};
+
+export type ExecutionProgress = {
+  tables: TableProgress[];
+  currentTable: string | null;
+};

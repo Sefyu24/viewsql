@@ -5,11 +5,14 @@ import type {
   DataGenResult,
   TableGenConfig,
   ColumnGenConfig,
+  ExecutionProgress,
+  TableProgress,
 } from "./types";
 
 /**
  * Topologically sort tables so parents (FK targets) come before children.
- * Uses Kahn's algorithm on the FK dependency graph.
+ * Uses DFS-based toposort on the FK dependency graph derived from both
+ * the schema FK definitions and the AI-generated foreignKey generators.
  */
 function topologicalSort(
   tables: TableGenConfig[],
@@ -24,15 +27,29 @@ function topologicalSort(
     deps.set(name, new Set());
   }
 
+  // 1. Schema-level FK relationships
   for (const name of tableNames) {
     const st = schemaMap.get(name);
     if (!st) continue;
     for (const col of st.columns) {
       if (col.isForeignKey && col.foreignTable && tableNames.has(col.foreignTable)) {
-        // Self-referencing FKs are allowed (handled by inserting NULLs first)
         if (col.foreignTable !== name) {
           deps.get(name)!.add(col.foreignTable);
         }
+      }
+    }
+  }
+
+  // 2. Config-level foreignKey generators (AI may reference tables the schema doesn't FK to)
+  for (const table of tables) {
+    for (const col of table.columns) {
+      if (
+        col.generator.type === "foreignKey" &&
+        col.generator.table &&
+        tableNames.has(col.generator.table) &&
+        col.generator.table !== table.tableName
+      ) {
+        deps.get(table.tableName)!.add(col.generator.table);
       }
     }
   }
@@ -161,6 +178,14 @@ async function generateRows(
   const rows: Record<string, unknown>[] = [];
   const colTypeMap = new Map(schemaTable.columns.map((c) => [c.name, c.dataType]));
 
+  // For self-referencing FKs: track PKs generated so far within this table.
+  // Detect which column is the PK and whether any column has a self-ref FK.
+  const pkCol = schemaTable.columns.find((c) => c.isPrimaryKey);
+  const hasSelfRef = tableConfig.columns.some(
+    (c) => c.generator.type === "foreignKey" && c.generator.table === tableConfig.tableName
+  );
+  const selfRefPKs: unknown[] = [];
+
   for (let i = 0; i < tableConfig.rowCount; i++) {
     const row: Record<string, unknown> = {};
 
@@ -187,14 +212,25 @@ async function generateRows(
           break;
 
         case "foreignKey": {
+          const isSelfRef = gen.table === tableConfig.tableName;
           const parentRows = generatedPKs.get(gen.table);
-          if (!parentRows || parentRows.length === 0) {
+
+          if (isSelfRef) {
+            // Self-referencing FK: use NULL for ~30% of rows (including the first),
+            // and pick from already-generated PKs in the current batch for the rest.
+            if (i === 0 || !selfRefPKs.length || Math.random() < 0.3) {
+              value = null;
+            } else {
+              value = selfRefPKs[Math.floor(Math.random() * selfRefPKs.length)];
+            }
+          } else if (!parentRows || parentRows.length === 0) {
             throw new Error(
               `FK reference failed: table "${gen.table}" has no rows. ` +
               `Ensure parent tables are populated before children.`
             );
+          } else {
+            value = parentRows[Math.floor(Math.random() * parentRows.length)];
           }
-          value = parentRows[Math.floor(Math.random() * parentRows.length)];
           break;
         }
 
@@ -230,6 +266,14 @@ async function generateRows(
     }
 
     rows.push(row);
+
+    // Track PK values for self-referencing FK resolution within this batch
+    if (hasSelfRef && pkCol) {
+      const pkValue = row[pkCol.name];
+      if (pkValue != null) {
+        selfRefPKs.push(pkValue);
+      }
+    }
   }
 
   return rows;
@@ -275,7 +319,8 @@ export async function executeDataGen(
   config: DataGenConfig,
   db: PGlite,
   schema: SchemaTable[],
-  seed?: number
+  seed?: number,
+  onProgress?: (progress: ExecutionProgress) => void
 ): Promise<DataGenResult> {
   const startTime = performance.now();
   const tablesInserted: { tableName: string; rowCount: number }[] = [];
@@ -302,21 +347,41 @@ export async function executeDataGen(
     };
   }
 
+  // Initialize progress tracking
+  const tableProgressList: TableProgress[] = sortedTables.map((t) => ({
+    tableName: t.tableName,
+    status: "pending" as const,
+    rowCount: t.rowCount,
+  }));
+
+  function emitProgress(currentTable: string | null) {
+    onProgress?.({ tables: [...tableProgressList], currentTable });
+  }
+
+  emitProgress(null);
+
   // Track generated PK values for FK resolution
   const generatedPKs = new Map<string, unknown[]>();
 
-  for (const tableConfig of sortedTables) {
+  for (let i = 0; i < sortedTables.length; i++) {
+    const tableConfig = sortedTables[i];
+    const progress = tableProgressList[i];
+    const tableStart = performance.now();
+
     const schemaTable = schemaMap.get(tableConfig.tableName);
     if (!schemaTable) {
-      errors.push({
-        tableName: tableConfig.tableName,
-        error: `Table "${tableConfig.tableName}" not found in schema`,
-      });
+      progress.status = "error";
+      progress.error = `Table "${tableConfig.tableName}" not found in schema`;
+      errors.push({ tableName: tableConfig.tableName, error: progress.error });
+      emitProgress(null);
       continue;
     }
 
     try {
       // Generate rows
+      progress.status = "generating";
+      emitProgress(tableConfig.tableName);
+
       const rows = await generateRows(
         tableConfig,
         generatedPKs,
@@ -324,9 +389,17 @@ export async function executeDataGen(
         fakerModule as unknown as { faker: Record<string, unknown> }
       );
 
-      if (rows.length === 0) continue;
+      if (rows.length === 0) {
+        progress.status = "done";
+        progress.elapsedMs = Math.round(performance.now() - tableStart);
+        emitProgress(null);
+        continue;
+      }
 
       // Build and execute INSERT SQL
+      progress.status = "inserting";
+      emitProgress(tableConfig.tableName);
+
       const columns = tableConfig.columns.map((c) => c.columnName);
       const statements = buildInsertSQL(
         tableConfig.tableName,
@@ -351,16 +424,22 @@ export async function executeDataGen(
         );
       }
 
+      progress.status = "done";
+      progress.elapsedMs = Math.round(performance.now() - tableStart);
+
       tablesInserted.push({
         tableName: tableConfig.tableName,
         rowCount: rows.length,
       });
     } catch (e) {
-      errors.push({
-        tableName: tableConfig.tableName,
-        error: e instanceof Error ? e.message : String(e),
-      });
+      const errorMsg = e instanceof Error ? e.message : String(e);
+      progress.status = "error";
+      progress.error = errorMsg;
+      progress.elapsedMs = Math.round(performance.now() - tableStart);
+      errors.push({ tableName: tableConfig.tableName, error: errorMsg });
     }
+
+    emitProgress(null);
   }
 
   const totalRows = tablesInserted.reduce((sum, t) => sum + t.rowCount, 0);
