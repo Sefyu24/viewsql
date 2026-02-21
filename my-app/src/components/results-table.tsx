@@ -62,8 +62,8 @@ export function ResultsTable({
       <Table>
         <TableHeader>
           <TableRow>
-            {result.columns.map((col) => (
-              <TableHead key={col} className="text-xs font-semibold">
+            {result.columns.map((col, colIdx) => (
+              <TableHead key={colIdx} className="text-xs font-semibold">
                 {col}
               </TableHead>
             ))}
@@ -72,8 +72,8 @@ export function ResultsTable({
         <TableBody>
           {result.rows.map((row, i) => (
             <TableRow key={i}>
-              {result.columns.map((col) => (
-                <TableCell key={col} className="text-xs font-mono">
+              {result.columns.map((col, colIdx) => (
+                <TableCell key={colIdx} className="text-xs font-mono">
                   {row[col] === null ? (
                     <span className="text-muted-foreground/50">NULL</span>
                   ) : (

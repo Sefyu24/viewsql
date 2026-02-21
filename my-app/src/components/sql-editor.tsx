@@ -1,30 +1,23 @@
 "use client";
 
-import { useCallback } from "react";
+import { useCallback, useMemo } from "react";
 import CodeMirror from "@uiw/react-codemirror";
-import { PostgreSQL } from "@codemirror/lang-sql";
+import { sql, PostgreSQL } from "@codemirror/lang-sql";
 import { oneDark } from "@codemirror/theme-one-dark";
 import { useTheme } from "next-themes";
 import { keymap } from "@codemirror/view";
+import type { SchemaTable } from "@/lib/sql/introspect";
 
-/**
- * CodeMirror-based SQL editor with PostgreSQL syntax highlighting.
- *
- * Supports dark/light theme matching, Cmd/Ctrl+Enter to run queries,
- * and schema-aware SQL dialect configuration.
- *
- * @param value - The current SQL string.
- * @param onChange - Callback fired when the editor content changes.
- * @param onRun - Callback fired when user presses Cmd/Ctrl+Enter.
- */
 export function SqlEditor({
   value,
   onChange,
   onRun,
+  schema,
 }: {
   value: string;
   onChange: (value: string) => void;
   onRun?: () => void;
+  schema?: SchemaTable[];
 }) {
   const { resolvedTheme } = useTheme();
   const isDark = resolvedTheme === "dark";
@@ -42,11 +35,26 @@ export function SqlEditor({
     ]);
   }, [onRun]);
 
+  const sqlExtension = useMemo(
+    () =>
+      sql({
+        dialect: PostgreSQL,
+        schema: schema?.reduce(
+          (acc, t) => {
+            acc[t.name] = t.columns.map((c) => c.name);
+            return acc;
+          },
+          {} as Record<string, string[]>
+        ),
+      }),
+    [schema]
+  );
+
   return (
     <CodeMirror
       value={value}
       onChange={onChange}
-      extensions={[PostgreSQL, runKeymap()]}
+      extensions={[sqlExtension, runKeymap()]}
       theme={isDark ? oneDark : undefined}
       placeholder="Write your SQL query here... (Cmd+Enter to run)"
       className="h-full text-sm"

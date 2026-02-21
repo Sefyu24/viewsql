@@ -159,6 +159,7 @@ export function ProjectWorkspace({
                     value={sql}
                     onChange={setSql}
                     onRun={handleRun}
+                    schema={schema}
                   />
                 </div>
               </div>
